@@ -1,0 +1,233 @@
+#R script for WGCNA Analysis 
+
+##Install and load packages 
+```{r }
+library(biomaRt)
+library(WGCNA)
+options(stringsAsFactors = FALSE)
+allowWGCNAThreads()
+
+library(dplyr)
+```
+##Read in covariate file which contains the sample ID and the diagnosis for each sample 
+```{r}
+sample.infor <- read.delim("covariate.txt")
+dim(sample.infor)	
+
+names(sample.infor)
+
+datExpr0 = as.data.frame(sample.infor$PathDX);
+rownames(datExpr0) <- sample.infor$Sample
+colnames(datExpr0) = c("PathDX")
+dim(datExpr0)
+
+colnames(datExpr0)
+
+
+sample.infor <- datExpr0
+sample.infor[1:5,]
+```
+
+##Load Expression Values: need to make sure that the rows are samples, and columns are genes. 
+```{r}
+exp <- read.delim("residual_sex_aad_rin_pid_ctrl_new.txt")
+dim(exp)
+
+exp$PathDX = exp$path_dx
+exp = exp %>% select(PathDX, everything())
+exp$path_dx = NULL
+exp = exp %>% select(Sample, everything())
+datExpr0 = as.data.frame(exp[, -c(1:5)])
+dim(datExpr0)
+
+datExpr0[1:5,1:4]
+  
+rownames(datExpr0) <-exp$ID
+rownames(datExpr0)
+ 
+datExpr0[1:5,1:3]
+      
+exp<-datExpr0
+dim(exp)
+
+save(exp, sample.infor, file = "Input.RData")
+
+
+# Choose sft-thresholding Powers.
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to=20, by=2))
+powers
+ 
+sft = pickSoftThreshold(exp, powerVector = powers, networkType="signed hybrid",verbose = 5)
+
+sft
+```
+
+## Plot soft thresholds to visualize which soft threshold to choose. This could be different from the sft value (Scale-free topology fit index as a function of the soft-thresholding power)
+```{r}
+# plot soft thresholds to visualize which soft threshold to choose. This could be different from the sft value (Scale-free topology fit index as a function of the soft-thresholding power)
+pdf("soft_thresholding_powers.pdf", width=9, height=7)
+par(mfrow = c(1,2));
+cex1 = 0.9;
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",     main = paste("Scale independence"));
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+  labels=powers,cex=cex1,col="red");
+
+# this line corresponds to using an R^2 cut-off of h
+
+abline(h=0.9,col="red")
+
+# Mean connectivity as a function of the soft-thresholding power
+
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+dev.off()
+
+## The plots showed that a power of 7 reaches R2 of 0.8.  Try using 6 for network construction
+##Automatic network construction. 
+
+net = blockwiseModules(exp, power = 7, networkType = "signed hybrid",
+                       TOMType = "signed", minModuleSize =60,
+                       reassignThreshold = 0, mergeCutHeight = 0.3,
+                       numericLabels = TRUE, pamRespectsDendro = FALSE,
+                       saveTOMs = TRUE,  maxBlockSize = 20000,
+                       saveTOMFileBase = "TOM", 
+                       verbose = 3)
+table(net$colors) 
+
+pdf("module_colors.pdf", width=12,height=9)
+mergedColors = labels2colors(net$colors)
+plotDendroAndColors(net$dendrograms[[1]], mergedColors[net$blockGenes[[1]]],
+                    "Module colors",
+                    dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05)
+dev.off()
+moduleLabels = net$colors
+moduleColors = labels2colors(net$colors)
+MEs = net$MEs;
+geneTree = net$dendrograms[[1]];
+save(MEs, moduleLabels, moduleColors, geneTree, 
+     file = "networkConstruction-auto.RData")
+
+
+table(mergedColors)
+```
+```{r}
+# Define numbers of genes and samples
+nGenes = ncol(exp);
+nSamples = nrow(exp);
+# Recalculate MEs with color labels
+MEs0 = moduleEigengenes(exp, moduleColors)$eigengenes
+MEs = orderMEs(MEs0)
+moduleTraitCor = cor(MEs, sample.infor, use = "p");
+moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nSamples);
+
+
+pdf("ME_trait_correlation.pdf", width=10,height=10)
+# Will display correlations and their p-values
+textMatrix =  paste(signif(moduleTraitCor, 2), "\t(",
+                           signif(moduleTraitPvalue, 1), ")", sep = "");
+dim(textMatrix) = dim(moduleTraitCor)
+par(mar = c(6, 8.5, 3, 3));
+# Display the correlation values within a heatmap plot
+labeledHeatmap(Matrix = moduleTraitCor,
+               xLabels = names(sample.infor),
+               yLabels = names(MEs),
+               ySymbols = names(MEs),
+               colorLabels = FALSE,
+               colors = blueWhiteRed (50),
+               textMatrix = textMatrix,
+               setStdMargins = FALSE,
+               cex.text = 1,
+               zlim = c(-1,1),
+               main = paste("Module-trait relationships"))
+dev.off()
+```
+## Quantify Gene relationship to our trait of interest: Group
+```{r}
+# Define variable Group containing the Group column of sample.infor 
+PathDX = as.data.frame(sample.infor$PathDX);
+names(PathDX) = "PathDX"
+# names (colors) of the modules
+modNames = substring(names(MEs), 3)
+
+geneModuleMembership = as.data.frame(cor(exp, MEs, use = "p"));
+MMPvalue = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples));
+
+names(geneModuleMembership) = paste("MM", modNames, sep="");
+names(MMPvalue) = paste("p.MM", modNames, sep="");
+
+geneTraitSignificance = as.data.frame(cor(exp, PathDX, use = "p"));
+GSPvalue = as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples));
+
+names(geneTraitSignificance) = paste("GS.", names(PathDX), sep="");
+names(GSPvalue) = paste("p.GS.", names(PathDX), sep="");
+```
+##Install biomaRt to annotate Ensembl IDs with HUGO gene symbol and entrez ID. 
+##The HUGO gene symbol is for the PI to get the first impression of interesting genes, and the entrez ID is for using the GO analysis in WGCNA
+#open bioMart
+```{r}
+library("biomaRt") 
+ensembl  <-  useMart(biomart="ENSEMBL_MART_ENSEMBL", dataset="hsapiens_gene_ensembl")
+bm <-getBM(attributes=c("chromosome_name","start_position","end_position","hgnc_symbol","entrezgene_id", "ensembl_gene_id"), mart=ensembl)
+dim(bm)
+
+#match Ensembl IDs from the experiment to the bm file which contains Ensembl ID, Entrez ID, Hugo gene symbol etc.
+
+probes = names(exp)
+probes2bm = match(probes, bm$ensembl_gene_id)
+sum(is.na(probes2bm))
+
+#We now create a data frame holding the following information for all probes: probe ID, gene symbol, chr, start, stop, Locus Link ID(Entrez code), module color, gene significance for Type, and module membership and p-values in all modules. The modules will be ordered by their significance for Type, with the most significant ones to the left. 
+# Create the starting data frame
+
+geneInfo0 = data.frame(Ensemble_ID = probes,
+geneSymbol = bm$hgnc_symbol[probes2bm],
+Chr = bm$chromosome_name[probes2bm],
+Start= bm$start_position[probes2bm],
+Stop= bm$end_position[probes2bm],
+LocusLinkID = bm$entrezgene[probes2bm],
+moduleColor = moduleColors,
+geneTraitSignificance,
+GSPvalue)
+```
+
+```{r}
+# Order modules by their significance for PathDX
+modOrder = order(-abs(cor(MEs, PathDX, use = "p")));
+# Add module membership information in the chosen order
+for (mod in 1:ncol(geneModuleMembership))
+{
+  oldNames = names(geneInfo0)
+  geneInfo0 = data.frame(geneInfo0, geneModuleMembership[, modOrder[mod]], 
+                         MMPvalue[, modOrder[mod]]);
+  names(geneInfo0) = c(oldNames, paste("MM.", modNames[modOrder[mod]], sep=""),
+                       paste("p.MM.", modNames[modOrder[mod]], sep=""))
+}
+
+# Order the genes in the geneInfo variable first by module color, then by geneTraitSignificance
+geneOrder = order(geneInfo0$moduleColor, -abs(geneInfo0$GS.PathDX));
+geneInfo = geneInfo0[geneOrder, ]
+write.csv(geneInfo, file = "geneInfo.csv")
+
+##Run Anrichment analysis on all modules 
+
+
+##Run enrichment analysis
+
+library("anRichment")
+GOcollection = buildGOcollection(organism = "human")
+
+LocusLinkID = bm$entrezgene[probes2bm]
+
+
+GOenrichment = enrichmentAnalysis( classLabels = moduleColors, identifiers = LocusLinkID, refCollection = GOcollection, useBackground = "given", threshold = 1e-4, thresholdType = c("Bonferroni", "FDR", "nominal"),nBestDataSets=10, getOverlapEntrez = FALSE, getOverlapSymbols = TRUE, maxReportedOverlapGenes=100, ignoreLabels = "grey", getFDR=TRUE, getBonferroniCorrection=TRUE);
+
+collectGarbage();
+write.csv(GOenrichment$enrichmentTable, file = "AnRichment-enrichmentTable.csv", row.names = FALSE)
+
+```
+
