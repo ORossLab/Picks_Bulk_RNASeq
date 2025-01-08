@@ -1,0 +1,913 @@
+#R code for the analysis of short-read bulk RNA sequencing data for our study titled: "Characterizing the expression profile of 3R tau pathology in Pick’s disease". 
+
+
+##Setting up R environment 
+
+```{r}
+# Load required packages 
+library(cqn)
+library(tidyverse)
+library(readr)
+library(ggh4x)
+library(gridExtra)
+library(BRETIGEA)
+library('variancePartition')
+library(UpSetR)
+library('xlsx')
+library(cowplot)
+
+# Set base directories as needed
+
+# Defining Functions 
+named_group_split <- function(.tbl, ...) {
+  grouped <- group_by(.tbl, ...)
+  names <- rlang::eval_bare(rlang::expr(paste(!!!group_keys(grouped), sep = " / ")))
+
+  grouped %>% 
+    group_split() %>% 
+    rlang::set_names(names)
+}
+```
+
+## "Pick's vs Control"  Differential gene expression comparison 
+```{r}
+# Uploading initial files: Raw count, Gene features, and Demographics  
+counts_raw <- read_delim(paste0(base_dir_1, "/merged_gene_count.tsv"), delim = "\t")
+gene_content <- read_delim(paste0(base_dir_1, "/hg38.Gene_features.GC_Content.txt"), delim = "\t")
+
+# Pull gene info
+gene_info <- counts_raw[,1:7]
+
+# Subset counts
+counts_raw <- counts_raw %>%
+  select(GeneId, ends_with("_count"))
+
+# Sample info
+PicksControlsRNABulkdemographics <- read_csv("R Input files/PiD_Ctrl_Raw_input/PicksControlsRNABulkdemographics.csv")
+sample_info_raw <- PicksControlsRNABulkdemographics %>%
+  janitor::clean_names() 
+```
+
+##Cleaning the raw data
+```{r}
+# Subset to genes with length and GC-content information for normalization
+counts_subset <- counts_raw %>%
+  inner_join(select(gene_content, GeneID), by = c("GeneId" = "GeneID")) %>%
+  arrange(desc(GeneId))
+
+dim(counts_subset)
+
+# Match order of count file
+gene_content <- gene_content %>%
+  mutate(Length = Stop - Start) %>%
+  select(GeneID, GC_Content, Length) %>%
+  inner_join(select(counts_subset, GeneId), by = c("GeneID" = "GeneId")) %>%
+  arrange(desc(GeneID))
+
+
+sample_info_subset <- sample_info_raw %>%
+  janitor::clean_names() %>%
+  mutate(sample_id = paste0(progeny_id, "_count"),
+         sex = factor(sex, levels = c("F","M")), 
+         apo_e = str_replace_all(apo_e, "\\?","E"))
+dim(sample_info_subset )
+```
+
+##Principle Component Analysis
+```{r}
+
+nzv_genes <- counts_subset %>%
+  tidyr::pivot_longer(-GeneId, names_to = "sample_id", values_to = "expression") %>%
+  group_by(GeneId) %>%
+  summarise(stdev = sd(expression)) %>%
+  ungroup() %>%
+  filter(stdev > 0.001) %>%
+  pull(GeneId)
+
+pca_df <- counts_subset %>%
+  filter(GeneId %in% nzv_genes) %>%
+  tidyr::pivot_longer(-GeneId, names_to = "sample_id", values_to = "expression") %>%
+  group_by(sample_id) %>%
+  mutate(total_reads = sum(expression),
+         norm_expr = expression / total_reads) %>%
+  ungroup() %>%
+  select(-total_reads, -expression) %>%
+  tidyr::pivot_wider(names_from = GeneId,
+                     values_from = norm_expr)
+
+pca_mat <- pca_df %>%
+  select(-sample_id) %>%
+  as.matrix()
+rownames(pca_mat) <- pca_df$sample_id
+
+pca_results <- prcomp(pca_mat,
+                      center = TRUE,
+                      scale. = TRUE)
+
+pca_tidy <- pca_results %>%
+  broom::tidy() %>%
+  tidyr::pivot_wider(names_from = PC,
+                     names_prefix = "PC",
+                     names_sep = "",
+                     values_from = value) %>%
+  rename(sample_id = row) %>%
+  left_join(sample_info_subset, by = "sample_id")
+
+#Plotting PCA 
+#PCA1: Sex 
+sex_colors <- c("M" = "cornflowerblue", "F" = "coral1")
+pca1 = pca_tidy %>%
+  ggplot(aes(x = PC1, y = PC2, color = sex)) +
+  geom_point() +
+  scale_color_manual(values = sex_colors) +
+  coord_fixed() +
+  labs(x = "PC1", y = "PC2") +
+  theme_bw() +   theme(
+    text = element_text(size = 14),  # Set the base text size
+    axis.title = element_text(size = 16),  # Set axis title size
+    axis.text = element_text(size = 14),   # Set axis tick label size
+    legend.title = element_text(size = 16),  # Set legend title size
+    legend.text = element_text(size = 14)   # Set legend text size
+  )
+
+#PCA2: Age at death (aad)
+pca2 = pca_tidy %>%
+  ggplot(aes(x = PC1, y = PC2, color = aad)) +
+  geom_point() +
+  coord_fixed() +
+  labs(x = "PC1", y = "PC2", color = "AAD") +
+  theme_bw() +   theme(
+    text = element_text(size = 14),  # Set the base text size
+    axis.title = element_text(size = 16),  # Set axis title size
+    axis.text = element_text(size = 14),   # Set axis tick label size
+    legend.title = element_text(size = 16),  # Set legend title size
+    legend.text = element_text(size = 14)   # Set legend text size
+  )
+
+#PCA3: RNA integrity score (RIN)
+pca3 = pca_tidy %>%
+  ggplot(aes(x = PC1, y = PC2, color = rin)) +
+  geom_point() +
+  coord_fixed() +
+  labs(x = "PC1", y = "PC2", color = "rin") +
+  theme_bw() +   theme(
+    text = element_text(size = 14),  # Set the base text size
+    axis.title = element_text(size = 16),  # Set axis title size
+    axis.text = element_text(size = 14),   # Set axis tick label size
+    legend.title = element_text(size = 16),  # Set legend title size
+    legend.text = element_text(size = 14)   # Set legend text size
+  )
+
+#PCA4: Path diagnosis (path_dx)
+pca4 = pca_tidy %>%
+  ggplot(aes(x = PC1, y = PC2, color = path_dx)) +
+  geom_point() +
+  coord_fixed() +
+  labs(x = "PC1", y = "PC2", Color = "path_dx") +
+  theme_bw() +   theme(
+    text = element_text(size = 14),  # Set the base text size
+    axis.title = element_text(size = 16),  # Set axis title size
+    axis.text = element_text(size = 14),   # Set axis tick label size
+    legend.title = element_text(size = 16),  # Set legend title size
+    legend.text = element_text(size = 14)   # Set legend text size
+  )
+
+combined_pca <- grid.arrange(pca1, pca2, pca3, pca4, nrow = 2)
+
+```
+
+##CQN Normalization 
+```{r}
+# Create base dataframes for CQN normalization
+counts_df <- counts_subset %>%
+  select(-GeneId) %>%
+  as.data.frame()
+rownames(counts_df) <- counts_subset$GeneId
+
+gene_content_df <- gene_content %>%
+  select(-GeneID) %>%
+  as.data.frame()
+rownames(gene_content_df) <- gene_content$GeneID
+
+# Normalize
+cqn_out <- cqn(counts_df,
+               lengths = gene_content_df$Length,
+               x = gene_content_df$GC_Content)
+
+# Extract RPKM
+cqn_rpkm <- cqn_out$y + cqn_out$offset
+cqn_df <- as_tibble(cqn_rpkm, rownames = "GeneId")
+
+# Convert to long-form for plotting
+cqn_df_long <- cqn_df %>%
+  tidyr::pivot_longer(-GeneId, names_to = "sample_id", values_to = "expr")
+
+# Compute median expression by group
+median_expr <- cqn_df_long %>%
+  left_join(select(sample_info_subset, sample_id, path_dx), by = "sample_id") %>%
+  group_by(GeneId, path_dx) %>%
+  summarise(median_expr = median(expr)) %>%
+  ungroup() %>%
+  mutate(keep = ifelse(median_expr < 2, FALSE, TRUE))
+
+#Plot log2(rpkm)
+p_rpkm <- cqn_df_long %>%
+  ggplot(aes(x = expr, color = sample_id)) +
+  geom_density() +
+  geom_vline(xintercept = 2, linetype = "dashed") +
+  labs(x = "log2(RPKM)", y = "Density") +
+  theme_bw() +
+  theme(legend.position = "none") +   theme(
+    text = element_text(size = 14),  
+    axis.title = element_text(size = 16),  
+    axis.text = element_text(size = 14),   
+    legend.title = element_text(size = 16),  
+    legend.text = element_text(size = 14)   
+  )
+
+plot(p_rpkm)
+```
+
+## Cell Type Proportion Analysis 
+```{r}
+
+#Make expression matrix of counts 
+
+expr_df = merge.data.frame(cqn_df, gene_info, by = 0, all.x=TRUE)
+expr_df = expr_df %>% select(GeneName, everything())
+expr_df = select(expr_df, -2:-3)
+
+sort(expr_df$GeneName[duplicated(expr_df$GeneName)])
+duplicates = which(duplicated(expr_df$GeneName))
+expr_df_fl <- expr_df[-duplicates, ]
+dim(expr_df_fl)
+
+row.names(expr_df_fl) = expr_df_fl$GeneName
+expr_df_fl <- expr_df_fl[, -c(1)]
+dim(expr_df_fl)
+
+expr_df_fl$GeneId.y = NULL
+expr_df_fl$Chromosome = NULL 
+expr_df_fl$Start = NULL
+expr_df_fl$End = NULL 
+expr_df_fl$Length = NULL 
+expr_df_fl$GeneBiotype = NULL 
+
+
+#Get markers
+markers_raw = markers_df_human_brain
+dim(markers_raw)
+
+
+#Keep markers that exist in experimental expression data 
+markers_subset = markers_raw[(markers_raw$markers %in% row.names(expr_df_fl)),]
+dim(markers_subset)
+table(markers_subset$cell)
+
+#Subset to markers per cell type 
+markers_neurons = markers_subset[markers_subset$cell == "neu",]
+markers_astrocytes= markers_subset[markers_subset$cell == "ast",]
+markers_oligos = markers_subset[markers_subset$cell == "oli",]
+markers_endo = markers_subset[markers_subset$cell == "end",]
+markers_opc = markers_subset[markers_subset$cell == "opc",]
+markers_microglia = markers_subset[markers_subset$cell == "mic",]
+
+#Get 50 markers per cell type 
+set.seed(101)
+marker_neurons_50 = markers_neurons[sample(1:(length(which(markers_subset$cell =="neu"))), 50, replace = FALSE), ]
+marker_astrocytes_50 = markers_astrocytes[sample(1:(length(which(markers_subset$cell =="ast"))), 50, replace = FALSE), ]
+marker_oligos_50 = markers_oligos[sample(1:(length(which(markers_subset$cell =="oli"))), 50, replace = FALSE), ]
+marker_microglia_50 = markers_microglia[sample(1:(length(which(markers_subset$cell =="mic"))), 50, replace = FALSE), ]
+marker_endo_50 = markers_endo[sample(1:(length(which(markers_subset$cell =="end"))), 50, replace = FALSE), ]
+marker_opc_50 = markers_opc[sample(1:(length(which(markers_subset$cell =="opc"))), 50, replace = FALSE), ]
+
+#Check output
+neu_prop_markers = row.names(expr_df_fl[(row.names(expr_df_fl) %in% marker_neurons_50$markers),])
+neu_prop_markers
+
+ast_prop_markers=row.names(expr_df_fl[(row.names(expr_df_fl) %in% marker_astrocytes_50$markers),])
+ast_prop_markers
+
+oligos_prop_markers=row.names(expr_df_fl[(row.names(expr_df_fl) %in% marker_oligos_50$markers),])
+oligos_prop_markers
+
+microglia_prop_markers=row.names(expr_df_fl[(row.names(expr_df_fl) %in% marker_microglia_50$markers),])
+microglia_prop_markers
+
+endo_prop_markers=row.names(expr_df_fl[(row.names(expr_df_fl) %in% marker_endo_50$markers),])
+endo_prop_markers
+
+opc_prop_markers = row.names(expr_df_fl[(row.names(expr_df_fl) %in% marker_opc_50$markers),])
+opc_prop_markers
+
+#Combine all markers in one dataframe
+cell_types = c(rep("neu", 50), rep("ast", 50), rep("oligos", 50),
+                rep("microglia", 50), rep("endo", 50), rep("opc", 50))
+All_markers = c(neu_prop_markers, ast_prop_markers, oligos_prop_markers, microglia_prop_markers, endo_prop_markers, opc_prop_markers)
+All_markers = as.data.frame(cbind(All_markers, cell_types))
+dim(All_markers)
+names(All_markers) = c("markers", "cell")
+
+#Getting proportions
+cell_prop = findCells(expr_df_fl, All_markers, nMarker=50, method="SVD", scale=TRUE)
+cell_prop_df <- as.data.frame(cell_prop)
+
+# Delete _count from row names 
+update_row_names <- sub("_count", "", rownames(cell_prop_df))
+rownames(cell_prop_df) <- update_row_names
+
+# Make Dataframe for later uses
+cell_prop_df$progeny_id = rownames(cell_prop_df)
+cell_prop_df = cell_prop_df %>% select(progeny_id, everything())
+
+# Make a new df and combine demographics with cell_prop
+sample_info_cell_prop = merge.data.frame(cell_prop_df, sample_info_subset, by.y = "progeny_id")
+
+
+##Plotting 
+
+# Comparing cell type proportions between picks and controls with box plots
+
+# astrocytes 
+astrocytes_plot <- ggplot(sample_info_cell_prop, aes(factor(path_dx), ast)) + 
+     geom_boxplot( aes(fill=path_dx)) + 
+     scale_color_manual(values=c("gray40")) + 
+  scale_fill_manual(values = c("royalblue1",  "violetred1")) +
+     theme_bw() + 
+     labs(x="", y="", title="Astrocytes")
+astrocytes_plot 
+
+
+
+# microglia 
+microglia_plot <- ggplot(sample_info_cell_prop, aes(factor(path_dx), microglia)) + 
+     geom_boxplot(varwidth=TRUE, aes(fill=path_dx)) + 
+     scale_color_manual(values=c("gray40")) +  
+  scale_fill_manual(values = c("royalblue1",  "violetred1")) +
+     theme_bw() + 
+     labs(x="", y="", title="Microglia")
+microglia_plot
+
+
+
+# neurons
+neurons_plot <- ggplot(sample_info_cell_prop, aes(factor(path_dx), neu)) + 
+     geom_boxplot(varwidth=TRUE, aes(fill=path_dx)) + 
+     scale_color_manual(values=c("gray40")) +
+   scale_fill_manual(values = c("royalblue1",  "violetred1")) +
+     theme_bw() + 
+     labs(x="", y="", title="Neurons")
+neurons_plot
+
+
+#oligos 
+oligos_plot <- ggplot(sample_info_cell_prop, aes(factor(path_dx), oligos)) + 
+     geom_boxplot(varwidth=TRUE, aes(fill=path_dx), outlier.shape=NA) + 
+     scale_color_manual(values=c("gray40")) +
+   scale_fill_manual(values = c("royalblue1",  "violetred1")) +
+     theme_bw() + 
+     labs(x="", y="", title="Oligodendrocytes")
+oligos_plot
+
+
+
+#endotelia
+endo_plot <- ggplot(sample_info_cell_prop, aes(factor(path_dx), endo)) + 
+     geom_boxplot(varwidth=TRUE, aes(fill=path_dx), outlier.shape=NA) + 
+     scale_color_manual(values=c("gray40")) +
+   scale_fill_manual(values = c("royalblue1",  "violetred1")) +
+     theme_bw() + 
+     labs(x="", y="", title="Endothelia")
+endo_plot
+
+#Oligodendrocyte precursor cells
+opc_plot <- ggplot(sample_info_cell_prop, aes(factor(path_dx), opc)) + 
+     geom_boxplot(varwidth=TRUE, aes(fill=path_dx), outlier.shape=NA) + 
+     scale_color_manual(values=c("gray40")) +
+   scale_fill_manual(values = c("royalblue1",  "violetred1")) +
+     theme_bw() + 
+     labs(x="", y="", title="Oligodendrocyte precursor cells")
+opc_plot
+
+
+combined_cell_prop_plots <- grid.arrange(neurons_plot, astrocytes_plot, microglia_plot, oligos_plot, opc_plot, endo_plot, nrow = 3)
+
+```
+
+
+## Source of variation analysis 
+
+```{r}
+#Source of variation (SOV) analysis will be performed using the variancePartition package 
+
+form <- ~ aad + rin + (1|sex)
+varPart = fitExtractVarPartModel (cqn_rpkm, form, sample_info_cell_prop)
+
+vp <- sortCols( varPart ) 
+plotVarPart( vp )
+
+vp_plot1=plotVarPart( vp) + theme(legend.position = "none") + theme(
+    text = element_text(size = 14),  # Set the base text size
+    axis.title = element_text(size = 16),  # Set axis title size
+    axis.text = element_text(size = 14),   # Set axis tick label size
+    legend.title = element_text(size = 16),  # Set legend title size
+    legend.text = element_text(size = 14)   # Set legend text size
+  )
+plot(vp_plot1)
+
+
+# SOV with cell type proportions 
+form_2 <- ~ neu + ast+ oligos+ microglia + endo + opc 
+varPart_2 = fitExtractVarPartModel (cqn_rpkm, form_2, sample_info_cell_prop)
+vp_2 <- sortCols( varPart_3 ) 
+plotVarPart( vp_2 )
+vp_plot2=plotVarPart( vp_2 ) +
+  theme(legend.position = "none") + theme(
+    text = element_text(size = 14),  # Set the base text size
+    axis.title = element_text(size = 16),  # Set axis title size
+    axis.text = element_text(size = 14),   # Set axis tick label size
+    legend.title = element_text(size = 16),  # Set legend title size
+    legend.text = element_text(size = 14)   # Set legend text size
+  )
+
+plot(vp_plot2)
+```
+
+
+##Subset for Differential Gene Expression Analysis
+```{r}
+# Filter genes
+genes_to_keep <- median_expr %>%
+  filter(keep == TRUE) %>%
+  select(GeneId) %>%
+  distinct() %>%
+  pull(GeneId)
+
+
+cqn_df_fl = cqn_df %>%
+  filter(GeneId %in% genes_to_keep)
+
+cqn_rpkm_fl <- cqn_df %>%
+ filter(GeneId %in% genes_to_keep)
+
+```
+
+#Pick's vs Controls Differential Gene Expression using a linear regression model
+```{r}
+## 1. model = ' ~ sex + aad + rin'
+  # Fit models
+  deg_fits <- cqn_df_long %>%
+    filter(GeneId %in% genes_to_keep) %>%
+    left_join(select(sample_info_subset, sample_id, path_dx, sex, aad, rin), by = "sample_id") %>%
+    mutate(path_dx = factor(path_dx)) %>%
+    named_group_split(GeneId) %>%
+    purrr::map(~ lm(expr ~ path_dx + sex + aad  + rin, data = .x)) %>%
+    purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+
+##Get residuals 
+gene2 = as.data.frame(t(cqn_df))
+colnames(gene2) = gene2[1,]
+gene2 = gene2[-c(1),]
+
+gene3 = gene2[(colnames(gene2) %in% genes_to_keep)]
+gene3_sample_info = merge(gene3, sample_info_subset, by.x = 0, by.y="sample_id" )
+rownames(gene3_sample_info) = gene3_sample_info$Row.names
+gene3_sample_info$Row.names=NULL 
+
+stopifnot(all(colnames(gene3) == colnames(gene3_sample_info)[1:ncol(gene3)]))
+  
+rValues <- c()
+# Loop for each of the genes to obtain residuals (without group variable)
+for(col1 in 1:ncol(gene3)){
+  ## Model
+  f1 <- lm(gene3[, col1] ~ sex + aad + rin, data=gene3_sample_info)
+  
+  ## Extract residuals
+  r1 <- residuals(f1)
+  rValues$col1 <- r1
+  names(rValues)[col1] <- names(gene3[col1])
+}
+
+rValues_info = merge(rValues, sample_info_subset, by.x = 0, by.y = "sample_id")
+residual_sex_aad_rin_pid_ctrl_new = rValues_info
+
+
+# Add extra information
+
+rValues <- as.data.frame(rValues)
+dim(rValues)
+#head(rValues)
+stopifnot(all(rownames(rValues) == rownames(gene3_sample_info)))
+
+
+
+# Reformat median expression for merge
+  median_expr_wide <- median_expr %>%
+    filter(keep == TRUE) %>%
+    select(GeneId, path_dx, median_expr) %>%
+    tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+  colnames(median_expr_wide)[2]  <- "median_expr_Control" 
+  colnames(median_expr_wide)[3]  <- "median_expr_PiD" 
+
+# Get DEGs
+  degs_pid <- deg_fits %>%
+    filter(term == "path_dxPiD") %>%
+    mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+    left_join(gene_info, by = "GeneId") %>%
+    left_join(select(median_expr_wide, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+    select(GeneId, Chromosome:GeneBiotype, everything())
+  
+# Get Significant DEGs 
+  signif_degs_pid <- degs_pid %>%
+    filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+    pull(GeneId)
+  
+  
+## 2. model = ' ~ sex + aad + rin + astrocytes'
+  
+  # Fit models  
+  deg_fits_cell_prop_ast <- cqn_df_long %>%
+    filter(GeneId %in% genes_to_keep) %>%
+    left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, ast), by = "sample_id") %>%
+    mutate(path_dx = factor(path_dx)) %>%
+    named_group_split(GeneId) %>%
+    purrr::map(~ lm(expr ~ path_dx + sex + aad + rin + ast, data = .x)) %>%
+    purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+  
+  # Reformat median expression for merge
+  median_expr_wide_cell_prop_ast <- median_expr %>%
+  filter(keep == TRUE) %>%
+  select(GeneId, path_dx, median_expr) %>%
+  tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+  colnames(median_expr_wide_cell_prop_ast)[2]  <- "median_expr_Control" 
+  colnames(median_expr_wide_cell_prop_ast)[3]  <- "median_expr_PiD" 
+  
+  # Get DEGs
+  degs_pid_cell_prop_ast <- deg_fits_cell_prop_ast %>%
+  filter(term == "path_dxPiD") %>%
+  mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+  left_join(gene_info, by = "GeneId") %>%
+  left_join(select(median_expr_wide_cell_prop_ast, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+  select(GeneId, Chromosome:GeneBiotype, everything())
+  
+  # Get Significant DEGs 
+  signif_degs_pid_cell_prop_ast <- degs_pid_cell_prop_ast %>%
+    filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+    pull(GeneId)
+  
+## 3. model = ' ~ sex + aad + rin + neurons'  
+  
+  # Fit models 
+    deg_fits_cell_prop_neu <- cqn_df_long %>%
+      filter(GeneId %in% genes_to_keep) %>%
+      left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, neu), by = "sample_id") %>%
+      mutate(path_dx = factor(path_dx)) %>%
+      named_group_split(GeneId) %>%
+      purrr::map(~ lm(expr ~ path_dx + sex + aad  + rin + neu, data = .x)) %>%
+      purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+    
+    # Reformat median expression for merge
+    median_expr_wide_cell_prop_neu <- median_expr %>%
+      filter(keep == TRUE) %>%
+      select(GeneId, path_dx, median_expr) %>%
+      tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+      colnames(median_expr_wide_cell_prop_neu)[2]  <- "median_expr_Control" 
+      colnames(median_expr_wide_cell_prop_neu)[3]  <- "median_expr_PiD" 
+    
+    # Get DEGs
+      degs_pid_cell_prop_neu <- deg_fits_cell_prop_neu %>%
+      filter(term == "path_dxPiD") %>%
+      mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+      left_join(gene_info, by = "GeneId") %>%
+      left_join(select(median_expr_wide_cell_prop_neu, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+      select(GeneId, Chromosome:GeneBiotype, everything())
+  
+    # Get Significant DEGs 
+      signif_degs_pid_cell_prop_neu <- degs_pid_cell_prop_neu %>%
+      filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+      pull(GeneId)
+
+## 4. model = ' ~ sex + aad + rin + microglia'      
+    
+    # Fit models
+      deg_fits_cell_prop_microglia <- cqn_df_long %>%
+        filter(GeneId %in% genes_to_keep) %>%
+        left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, microglia), by = "sample_id") %>%
+        mutate(path_dx = factor(path_dx)) %>%
+        named_group_split(GeneId) %>%
+        purrr::map(~ lm(expr ~ path_dx + sex + aad  + rin + microglia, data = .x)) %>%
+        purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+      
+    # Reformat median expression for merge
+      median_expr_wide_cell_prop_microglia <- median_expr %>%
+          filter(keep == TRUE) %>%
+          select(GeneId, path_dx, median_expr) %>%
+          tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+      colnames(median_expr_wide_cell_prop_microglia )[2]  <- "median_expr_Control" 
+      colnames(median_expr_wide_cell_prop_microglia )[3]  <- "median_expr_PiD" 
+      
+    # Get DEGs
+      degs_pid_cell_prop_microglia <- deg_fits_cell_prop_microglia %>%
+      filter(term == "path_dxPiD") %>%
+      mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+      left_join(gene_info, by = "GeneId") %>%
+      left_join(select(median_expr_wide_cell_prop_microglia, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+      select(GeneId, Chromosome:GeneBiotype, everything())
+  
+    # Get Significant DEGs 
+      signif_degs_pid_cell_prop_microglia <- degs_pid_cell_prop_microglia %>%
+      filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+      pull(GeneId)      
+      
+## 5. model = ' ~ sex + aad + rin + oligos'      
+
+      # Fit models
+      deg_fits_cell_prop_oligos <- cqn_df_long %>%
+        filter(GeneId %in% genes_to_keep) %>%
+        left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, oligos), by = "sample_id") %>%
+        mutate(path_dx = factor(path_dx)) %>%
+        named_group_split(GeneId) %>%
+        purrr::map(~ lm(expr ~ path_dx + sex + aad  + rin + oligos, data = .x)) %>%
+        purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+      
+    # Reformat median expression for merge
+      median_expr_wide_cell_prop_oligos <- median_expr %>%
+          filter(keep == TRUE) %>%
+          select(GeneId, path_dx, median_expr) %>%
+          tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+      colnames(median_expr_wide_cell_prop_oligos )[2]  <- "median_expr_Control" 
+      colnames(median_expr_wide_cell_prop_oligos )[3]  <- "median_expr_PiD" 
+      
+    # Get DEGs
+      degs_pid_cell_prop_oligos <- deg_fits_cell_prop_oligos %>%
+      filter(term == "path_dxPiD") %>%
+      mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+      left_join(gene_info, by = "GeneId") %>%
+      left_join(select(median_expr_wide_cell_prop_oligos, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+      select(GeneId, Chromosome:GeneBiotype, everything())
+  
+    # Get Significant DEGs 
+      signif_degs_pid_cell_prop_oligos <- degs_pid_cell_prop_oligos %>%
+      filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+      pull(GeneId)       
+      
+
+## 6. model = ' ~ sex + aad + rin + opc'  
+    
+      # Fit models
+      deg_fits_cell_prop_opc <- cqn_df_long %>%
+        filter(GeneId %in% genes_to_keep) %>%
+        left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, opc), by = "sample_id") %>%
+        mutate(path_dx = factor(path_dx)) %>%
+        named_group_split(GeneId) %>%
+        purrr::map(~ lm(expr ~ path_dx + sex + aad  + rin + opc, data = .x)) %>%
+        purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+      
+    # Reformat median expression for merge
+      median_expr_wide_cell_prop_opc <- median_expr %>%
+          filter(keep == TRUE) %>%
+          select(GeneId, path_dx, median_expr) %>%
+          tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+      colnames(median_expr_wide_cell_prop_opc )[2]  <- "median_expr_Control" 
+      colnames(median_expr_wide_cell_prop_opc )[3]  <- "median_expr_PiD" 
+      
+    # Get DEGs
+      degs_pid_cell_prop_opc <- deg_fits_cell_prop_opc %>%
+      filter(term == "path_dxPiD") %>%
+      mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+      left_join(gene_info, by = "GeneId") %>%
+      left_join(select(median_expr_wide_cell_prop_opc, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+      select(GeneId, Chromosome:GeneBiotype, everything())
+  
+    # Get Significant DEGs 
+      signif_degs_pid_cell_prop_opc <- degs_pid_cell_prop_opc %>%
+      filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+      pull(GeneId)      
+      
+      
+## 7. model = ' ~ sex + aad + rin + endothelia'     
+      
+    # Fit models
+      deg_fits_cell_prop_endo <- cqn_df_long %>%
+        filter(GeneId %in% genes_to_keep) %>%
+        left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, endo), by = "sample_id") %>%
+        mutate(path_dx = factor(path_dx)) %>%
+        named_group_split(GeneId) %>%
+        purrr::map(~ lm(expr ~ path_dx + sex + aad  + rin + endo, data = .x)) %>%
+        purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+      
+    # Reformat median expression for merge
+      median_expr_wide_cell_prop_endo <- median_expr %>%
+          filter(keep == TRUE) %>%
+          select(GeneId, path_dx, median_expr) %>%
+          tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+      colnames(median_expr_wide_cell_prop_endo )[2]  <- "median_expr_Control" 
+      colnames(median_expr_wide_cell_prop_endo )[3]  <- "median_expr_PiD" 
+      
+    # Get DEGs
+      degs_pid_cell_prop_endo <- deg_fits_cell_prop_endo %>%
+      filter(term == "path_dxPiD") %>%
+      mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+      left_join(gene_info, by = "GeneId") %>%
+      left_join(select(median_expr_wide_cell_prop_endo, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+      select(GeneId, Chromosome:GeneBiotype, everything())
+  
+    # Get Significant DEGs 
+      signif_degs_pid_cell_prop_endo <- degs_pid_cell_prop_endo %>%
+      filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+      pull(GeneId)      
+      
+      
+## 8. model = ' ~ sex + aad + rin + astrocytes + neu + micorliga + endo + opc + oligos'       
+            
+  # Fit models 
+
+    deg_fits_cell_prop_all <- cqn_df_long %>%
+      filter(GeneId %in% genes_to_keep) %>%
+      left_join(select(sample_info_cell_prop, sample_id, path_dx, sex, aad, rin, neu, ast, microglia, endo, oligos, opc ), by = "sample_id") %>%
+      mutate(path_dx = factor(path_dx)) %>%
+      named_group_split(GeneId) %>%
+      purrr::map(~ lm(expr ~ path_dx + sex + aad + rin +ast + microglia + neu + endo + oligos + opc, data = .x)) %>%
+      purrr::map_dfr(broom::tidy, conf.int = TRUE, .id = "GeneId")
+
+  # Reformat median expression for merge
+
+  median_expr_wide_cell_prop_all <- median_expr %>%
+    filter(keep == TRUE) %>%
+    select(GeneId, path_dx, median_expr) %>%
+    tidyr::pivot_wider(names_from = path_dx,
+                     values_from = median_expr,
+                     names_prefix = "median_expr_",
+                     names_sep = "_")
+
+  colnames(median_expr_wide_cell_prop_all)[2]  <- "median_expr_Control" 
+  colnames(median_expr_wide_cell_prop_all)[3]  <- "median_expr_PiD" 
+ 
+  #Get DEGs 
+  degs_pid_cell_prop_all <- deg_fits_cell_prop_all %>%
+    filter(term == "path_dxPiD") %>%
+    mutate(q.value = p.adjust(p.value, method = "fdr")) %>%
+    left_join(gene_info, by = "GeneId") %>%
+    left_join(select(median_expr_wide_cell_prop_all, GeneId, median_expr_Control, median_expr_PiD), by = "GeneId") %>%
+    select(GeneId, Chromosome:GeneBiotype, everything())
+  
+  # Get Significant DEGs
+  signif_degs_pid_cell_prop_all <- degs_pid_cell_prop_all %>%
+  filter(q.value < 0.05,
+         abs(estimate) > 1.5) %>%
+  pull(GeneId)
+```
+
+##Compare and vizualize  DEG output with upset plot 
+```{r}
+input = c('PiD vs Control ~ sex + aad + rin'= 12, 
+          'PiD vs Control ~ sex + aad + rin + astrocytes' = 10,
+          'PiD vs Control ~ sex + aad + rin + microglia' = 10,
+          'PiD vs Control ~ sex + aad + rin + neurons' = 9,
+          'PiD vs Control ~ sex + aad + rin + oligoendrocytes' = 10,
+          'PiD vs Control ~ sex + aad + rin + opc' = 9,
+          'PiD vs Control ~ sex + aad + rin + endothelia' = 9 ,
+          'PiD vs Control ~ sex + aad + rin + all cell proportions' = 5 , 
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + all cell proportions' = 5,
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + astrocytes' = 10,
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + microglia' = 7, 
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + neurons' = 9, 
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + oligoendrocytes' = 8, 
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + opc' = 8, 
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + endothelia' = 8, 
+          'PiD vs Control ~ sex + aad + rin&PiD vs Control ~ sex + aad + rin + astrocytes&PiD vs Control ~ sex + aad + rin + microglia&PiD vs Control ~ sex + aad + rin + neurons&PiD vs Control ~ sex + aad + rin + oligoendrocytes&PiD vs Control ~ sex + aad + rin + opc&PiD vs Control ~ sex + aad + rin + endothelia&PiD vs Control ~ sex + aad + rin + all cell proportions' = 5
+          )
+
+main_bar_col <- c("cornflowerblue")
+sets_bar_col <- c("turquoise4")
+matrix_col <- c("cadetblue")
+shade_col <- c("lightslateblue")
+upset_input=fromExpression(input)
+
+upset(upset_input, 
+      nintersects = 40, 
+      nsets = 25, 
+      order.by = "freq", 
+      decreasing = T, 
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 3.0, 
+      point.size = 2.8, 
+      line.size = 1, main.bar.color = main_bar_col,
+	sets.bar.color = sets_bar_col, matrix.color = matrix_col,
+	shade.color = shade_col, keep.order = T, 
+      sets = c("PiD vs Control ~ sex + aad + rin + all cell proportions", "PiD vs Control ~ sex + aad + rin + endothelia", "PiD vs Control ~ sex + aad + rin + opc", "PiD vs Control ~ sex + aad + rin + oligoendrocytes","PiD vs Control ~ sex + aad + rin + astrocytes","PiD vs Control ~ sex + aad + rin + microglia","PiD vs Control ~ sex + aad + rin + neurons" ,"PiD vs Control ~ sex + aad + rin"))  
+```        
+
+##P distribution plot
+```{r}
+p_distribution_picks <- degs_pid %>%
+  ggplot(aes(x = p.value)) +
+  geom_histogram() +
+  geom_vline(xintercept = 0.05, linetype = "dashed") +
+  labs(x = "Pvalue", y = "Count") + ggtitle("P value Distribution Plot Pick's vs Controls") +
+  theme_bw()
+
+plot(p_distribution_picks)
+```
+
+##Volcano Plot
+```{r}
+options(ggrepel.max.overlaps = Inf)
+
+Volcano_plot_picks_1 <- degs_pid %>%
+  mutate(signif = ifelse((q.value < 0.05) & (abs(estimate) > 1.5), TRUE, FALSE),
+         GeneName = ifelse(signif == FALSE, NA, GeneName)) %>%
+  arrange(signif) %>%
+  ggplot(aes(x = estimate, y = -log10(p.value), color = signif)) +
+  geom_point() +
+  scale_color_manual(values = c("grey79", "maroon2")) +
+  ggrepel::geom_label_repel(aes(label = GeneName), color = "black") +
+  labs(x = "Fold Change", y = "Adjusted p value") +
+  theme_bw() +
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dotted", color = "black", size = 1.2) +
+  theme(legend.position = "none") + ggtitle("Differentially expressed genes in Pick's cases vs. Controls")  +   theme(
+    text = element_text(size = 14), 
+    axis.title = element_text(size = 16),  
+    axis.text = element_text(size = 14),   
+    legend.title = element_text(size = 16),  
+    legend.text = element_text(size = 14)   
+  )
+
+plot(Volcano_plot_picks_1)
+```
+
+##Boxplots 
+```{r}
+##Pick's vs Controls 
+pid_control_degs_boxplot <- read_excel("pid_control_degs_boxplot.xlsx")
+
+#Facet wrapped by direction of effect 
+boxplot_pid_control1 = ggplot(pid_control_degs_boxplot, aes( x=path_dx, y= expr, fill=path_dx) ) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.3) +
+  scale_fill_manual(values = c("royalblue1", "violetred1")) +
+  labs(y = "Expression") +
+  facet_nested(~DE_Status+GeneName , drop = TRUE, scales = "free_y") +
+  theme_bw() + theme(legend.position = "right", text = element_text(size = 15.5), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank()) +ggtitle("Significant differentially expressed genes in Pick's vs Controls")
+plot(boxplot_pid_control1)
+
+#No facet 
+boxplot_pid_control2 <- cqn_df_long %>%
+  filter(GeneId %in% signif_degs_pid) %>%
+  left_join(select(sample_info_subset, sample_id, path_dx), by = "sample_id") %>%
+  left_join(select(gene_info, GeneId, GeneName), by = "GeneId") %>%
+  ggplot(aes(x = path_dx, y = expr, fill = path_dx)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.3) +
+  scale_fill_manual(values = c("royalblue1", "violetred1")) +
+  labs(x = "Cohort", y = "Expression") +
+  facet_wrap(~ GeneName, scales = "free_y") +
+  theme_bw() +
+  theme(legend.position = "right") +ggtitle("Significant differentially expressed genes in Pick's vs Controls")
+
+plot(boxplot_pid_control2)        
+```
+
+
+
+
+
+
