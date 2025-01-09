@@ -22,16 +22,20 @@ Then we performed primer removal using lima and refined by trimming poly(A) tail
 
 Then we employed flair, documentation for which can be accessed here:  
 * https://github.com/BrooksLabUCSC/flair
+* https://flair.readthedocs.io/en/latest/modules.html#
 
+Using flair we performed aligment, correction, collapsing and quantification without using any optional arguments. 
 
-
+We then ran SQANTI3 by running the sqanti3_qc.py and sqanti3_filter.py scripts available here:  
+https://github.com/ConesaLab/SQANTI3/tree/master
 
 ## Validating transcripts identified with long-read sequencing using short-read sequencing data and Kallisto
 
-We used a custom annotation file where we added the sequences of our novel transcripts of interest. This file can be accessed in our Github "gencode.v44.transcripts.enriched.fa.gz". \ 
-For Kallisto, we used the documentation available here:
-* https://pachterlab.github.io/kallisto/about
+We used a custom annotation file where we added the sequences of our novel transcripts of interest. This file can be accessed in our Github "gencode.v44.transcripts.enriched.fa.gz".   
+For Kallisto, we used the documentation available here:  
+* https://pachterlab.github.io/kallisto/about  
 * https://github.com/pachterlab/kallisto
+  
 
 
 
