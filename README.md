@@ -18,7 +18,7 @@ In brief
 
 ## Validating transcripts identified with long-read sequencing using short-read sequencing data and Kallisto
 
-We used a custom annotation file where we added the sequences of our novel transcripts of interest. This file can be accessed in our Github "". 
+We used a custom annotation file where we added the sequences of our novel transcripts of interest. This file can be accessed in our Github "gencode.v44.transcripts.enriched.fa.gz". 
 For Kallisto, we used the documentation available here:
 * https://pachterlab.github.io/kallisto/about
 * https://github.com/pachterlab/kallisto
