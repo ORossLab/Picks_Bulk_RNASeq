@@ -14,14 +14,14 @@ For long-read RNA Sequencing analysis we used scripts and resources available th
 * https://github.com/PacificBiosciences/IsoSeq
 * https://isoseq.how/clustering/cli-workflow.html
 
-Please note that some of the versions of scripts and programs available through PacBio might be available different versions that what was used for this study.\
-In brief, we first generated CCS reads from the subreads.bam files for each sample using the following parameters:\
--min-passes 3 --min-snr 2.5 --min-length 10 --max-length 50000 --min-rq 0.9\
+Please note that some of the versions of scripts and programs available through PacBio might be available different versions that what was used for this study.
+In brief, we first generated CCS reads from the subreads.bam files for each sample using the following parameters:
+-min-passes 3 --min-snr 2.5 --min-length 10 --max-length 50000 --min-rq 0.9
 
-Then we performed primer removal using lima and refined by trimming poly(A) tails and removing concatemers using the isoseq3 refine command.\
+Then we performed primer removal using lima and refined by trimming poly(A) tails and removing concatemers using the isoseq3 refine command.
 
-Then we employed flair, documentation for which can be accessed here:\
-* https://github.com/BrooksLabUCSC/flair\
+Then we employed flair, documentation for which can be accessed here:
+* https://github.com/BrooksLabUCSC/flair
 
 
 
