@@ -2,8 +2,8 @@
 
 ## Short-read bulk RNA Sequencing https://github.com/ORossLab/Picks_Bulk_RNASeq/blob/main/README.md
 
-The script used for data clean up, quality control, normalization using CQN, and differential gene expression analysis can be found here in the "Bulk Short-read RNASeq Analysis Script" tab.\
-The script used for WGCNA can be found in the "WGCNA_analysis" tab.
+The script used for data clean up, quality control, normalization using CQN, and differential gene expression analysis can be found here: "Bulk Short-read RNASeq Analysis Script" tab.\
+The script used for WGCNA can be found under: "WGCNA_analysis".  
 
 ## Long-read bulk RNA Sequenicng 
 
