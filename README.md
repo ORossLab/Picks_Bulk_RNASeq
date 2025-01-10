@@ -24,7 +24,7 @@ Then we employed flair, documentation for which can be accessed here:
 * https://github.com/BrooksLabUCSC/flair
 * https://flair.readthedocs.io/en/latest/modules.html#
 
-Using flair we performed aligment, correction, collapsing and quantification without using any optional arguments. 
+Using flair we performed alingment, correction, collapsing and quantification without using any optional arguments. 
 
 We then ran SQANTI3 by running the sqanti3_qc.py and sqanti3_filter.py scripts available here:  
 https://github.com/ConesaLab/SQANTI3/tree/master
