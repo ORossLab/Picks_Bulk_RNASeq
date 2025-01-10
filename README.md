@@ -14,7 +14,7 @@ For long-read RNA Sequencing analysis we used scripts and resources available th
 * https://github.com/PacificBiosciences/IsoSeq
 * https://isoseq.how/clustering/cli-workflow.html
 
-Please note that some of the versions of scripts and programs available through PacBio might be available different versions that what was used for this study.  
+Please note that some of the versions of scripts and programs currently available through PacBio might be different that what was used for this study.  
 In brief, we first generated CCS reads from the subreads.bam files for each sample using the following parameters:  
 -min-passes 3 --min-snr 2.5 --min-length 10 --max-length 50000 --min-rq 0.9  
 
